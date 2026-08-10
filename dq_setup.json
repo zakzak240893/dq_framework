@@ -1,0 +1,21 @@
+{
+  "run": {
+    "remote": false,
+    "master": "spark://localhost:7077",
+    "schema_file": "data/schema.json"
+  },
+  "data": {
+    "file1": "data/dbx/F_FNC_BLK_INV_DOC.csv",
+    "file2": "data/sf/F_FNC_BLK_INV_DOC.csv",
+    "file1_type": "csv",
+    "file2_type": "csv"
+  },
+  "pk": {
+    "file": "data/sf/F_FNC_BLK_INV_DOC.csv",
+    "file_type": "csv"
+  },
+  "compare": {
+    "exclude_columns": [],
+    "key_columns": []
+  }
+}
