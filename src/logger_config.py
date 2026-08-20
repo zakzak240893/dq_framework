@@ -29,7 +29,7 @@ class StreamingLogger:
         self._logger.handlers = []  # Clear existing handlers
 
         # File handler with streaming mode
-        file_handler = logging.FileHandler(self.log_file, mode="a", encoding="utf-8")
+        file_handler = logging.FileHandler(self.log_file, mode="w", encoding="utf-8")
         file_handler.setLevel(level)
 
         # Formatter

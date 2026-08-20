@@ -80,6 +80,7 @@ class DataQualityFramework:
         exclude_columns: Optional[list] = None,
         schema_file_path: Optional[str] = None,
         key_columns: Optional[list] = None,
+        mismatch_output_path: str = "./data/mismatches.csv",
     ) -> Tuple[bool, Dict]:
         """
         Compare two local files (CSV/Parquet).
@@ -92,6 +93,7 @@ class DataQualityFramework:
             exclude_columns: List of columns to exclude from data comparison.
             schema_file_path: Optional Spark JSON schema file applied only for row-level data comparison.
             key_columns: Optional explicit key columns for row alignment.
+            mismatch_output_path: CSV path for rows missing from either dataset.
 
         Returns:
             Tuple of (is_successful, result_dict) where:
@@ -137,6 +139,12 @@ class DataQualityFramework:
                 df1_compare = df1_inferred
                 df2_compare = df2_inferred
 
+            pk_checked_columns = self.primary_key_finder._get_categorical_columns(df1_compare)
+            numeric_columns = self.primary_key_finder._get_numeric_columns(df1_compare)
+            self._log(f"Metadata | files_compared: file1={file1}, file2={file2}")
+            self._log(f"Metadata | pk_columns_checked: {pk_checked_columns}")
+            self._log(f"Metadata | numeric_columns: {numeric_columns}")
+
             key_columns_for_compare = None
             if key_columns:
                 missing_columns = [
@@ -162,7 +170,9 @@ class DataQualityFramework:
                 self._log(f"Using inferred PK columns for mismatch row identification: {key_columns_for_compare}")
             else:
                 if not key_columns_for_compare:
-                    self._log("No PK found for mismatch row identification. Falling back to row order.", "warning")
+                    error_message = "No PK found for mismatch row identification. Row-number fallback is disabled."
+                    self._log(error_message, "error")
+                    return False, {"error": error_message}
 
             # Compare data
             total_mismatches, mismatch_samples = self.data_comparator.compare_data(
@@ -170,6 +180,7 @@ class DataQualityFramework:
                 df2_compare,
                 exclude_columns,
                 key_columns=key_columns_for_compare,
+                mismatch_output_path=mismatch_output_path,
             )
 
             self._log(f"Data comparison completed. Total mismatches: {total_mismatches}")
@@ -188,7 +199,8 @@ class DataQualityFramework:
                 "schemas_match": True,
                 "total_mismatches": total_mismatches,
                 "mismatch_samples": mismatch_samples,
-                "row_identifier_columns": key_columns_for_compare or ["row_num"],
+                "row_identifier_columns": key_columns_for_compare,
+                "missing_rows_file": mismatch_output_path,
             }
 
         except Exception as e:

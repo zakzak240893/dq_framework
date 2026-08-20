@@ -38,7 +38,6 @@ class PrimaryKeyFinder:
         3. Use categorical (non-numeric) columns first.
         4. Sort candidate columns by cardinality (high to low).
         5. Iteratively build a PK list and test uniqueness.
-        6. If categorical columns are insufficient, continue by adding numeric columns.
 
         Args:
             df: Input DataFrame.
@@ -63,33 +62,21 @@ class PrimaryKeyFinder:
             total_rows = distinct_row_count
 
         categorical_cols = self._get_categorical_columns(working_df)
-        numeric_cols = self._get_numeric_columns(working_df)
-
-        candidate_cols = categorical_cols + numeric_cols
-        if not candidate_cols:
+        if not categorical_cols:
             return False, []
 
         # OPTIMIZATION: Calculate all cardinalities in a SINGLE pass
         from pyspark.sql.functions import count_distinct as cd
-        cardinality_row = working_df.select([cd(col(c)).alias(c) for c in candidate_cols]).first()
-        cardinality_map = {col_name: cardinality_row[col_name] for col_name in candidate_cols}
+        cardinality_row = working_df.select([cd(col(c)).alias(c) for c in categorical_cols]).first()
+        cardinality_map = {col_name: cardinality_row[col_name] for col_name in categorical_cols}
 
         sorted_categorical_cols = sorted(
             categorical_cols, key=lambda x: cardinality_map[x], reverse=True
         )
-        sorted_numeric_cols = sorted(
-            numeric_cols, key=lambda x: cardinality_map[x]
-        )
 
-        # Build PK candidates with categorical columns first.
+        # Build PK candidates with categorical columns only.
         pk_candidates: List[str] = []
         for col_name in sorted_categorical_cols:
-            pk_candidates.append(col_name)
-            if self._check_uniqueness(working_df, pk_candidates, total_rows):
-                return True, pk_candidates
-
-        # If needed, continue by adding numeric columns from lowest cardinality first.
-        for col_name in sorted_numeric_cols:
             pk_candidates.append(col_name)
             if self._check_uniqueness(working_df, pk_candidates, total_rows):
                 return True, pk_candidates

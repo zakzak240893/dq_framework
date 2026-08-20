@@ -6,6 +6,7 @@ Provides example usage of the framework.
 import os
 import sys
 import json
+from datetime import datetime
 
 # CRITICAL: Set environment variable BEFORE any Spark imports
 # This fixes Windows JDK 25+ compatibility issue with Hadoop security
@@ -186,6 +187,7 @@ def main():
     remote_mode = args.remote if args.remote is not None else bool(run_cfg.get("remote", False))
     master_url = args.master or run_cfg.get("master", "spark://localhost:7077")
     schema_file = _resolve_path(args.schema_file or run_cfg.get("schema_file"), config_dir)
+    mismatch_output_path = _resolve_path(run_cfg.get("mismatch_output_path", "data/mismatches.csv"), config_dir)
 
     file1 = _resolve_path(args.file1 or data_cfg.get("file1", "data/sample1.csv"), config_dir)
     file2 = _resolve_path(args.file2 or data_cfg.get("file2", "data/sample2.csv"), config_dir)
@@ -205,8 +207,13 @@ def main():
         args.key_columns if args.key_columns is not None else compare_cfg.get("key_columns")
     )
 
-    # Initialize framework with logging to file
-    log_path = Path(__file__).parent / "dq.log"
+    # Initialize framework with a new log file for each run
+    logs_dir = Path(__file__).parent / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = logs_dir / f"dq_{run_timestamp}.log"
+
+    print(f"Log file: {log_path}")
     
     framework = DataQualityFramework(
         log_file=str(log_path),
@@ -226,6 +233,7 @@ def main():
             exclude_columns=exclude_columns,
             schema_file_path=schema_file,
             key_columns=key_columns,
+            mismatch_output_path=mismatch_output_path,
         )
 
         if success:
@@ -233,6 +241,8 @@ def main():
             print(f"Total mismatches: {result['total_mismatches']}")
             if result.get("row_identifier_columns"):
                 print(f"Row identifier columns: {result['row_identifier_columns']}")
+            if result.get("missing_rows_file"):
+                print(f"Missing rows file: {result['missing_rows_file']}")
             if result['mismatch_samples']:
                 print("\nMismatch samples (up to 3 per column):")
                 for col_name, samples in result['mismatch_samples'].items():

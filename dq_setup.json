@@ -5,17 +5,17 @@
     "schema_file": "data/schema.json"
   },
   "data": {
-    "file1": "data/dbx/F_FNC_BLK_INV_DOC.csv",
-    "file2": "data/sf/F_FNC_BLK_INV_DOC.csv",
+    "file1": "data/extended.csv",
+    "file2": "data/original.csv",
     "file1_type": "csv",
     "file2_type": "csv"
   },
   "pk": {
-    "file": "data/sf/F_FNC_BLK_INV_DOC.csv",
+    "file": "data/extended.csv",
     "file_type": "csv"
   },
   "compare": {
-    "exclude_columns": [],
-    "key_columns": []
+    "exclude_columns": ["T_REC_INS_TST", "T_REC_UPD_TST", "DAT_ADD", "BCP_MAT_TYP_GRP"],
+    "key_columns": ["PUR_DOC_NUM", "NET_ORD_VAL", "MAT_COD", "MAT_KEY", "PHY_CTR_DOC_NUM", "PHY_CTR_NET_PUR_PRC", "PUR_NET_PRC_DOC_VAL_EUR", "VRT_CTR_DOC_NUM", "VRT_CTR_NET_PUR_PRC", "VDR_COD", "VDR_KEY", "VDR_SIT_COD", "VDR_SIT_DSC", "PUR_ORD_RND_SKU_QTY", "PHY_CTR_VLD_END_DAT", "MIN_1ST_RQT_DAT", "LST_STC_DAT", "PUR_DOC_DAT", "RQT_DLV_DAT", "PUR_DOC_CRE_DAT", "MIN_DLV_DAT", "VDR_SIT_CTY", "PUR_DOC_CRE_USR_COD", "PHY_CTR_EXG_RAT", "VRT_CTR_VLD_END_DAT", "PHY_CTR_DOC_ITM", "LDT_DLV", "PRS_DAY", "PUR_DOC_ITM"]
   }
 }

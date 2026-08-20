@@ -120,13 +120,22 @@ The `docker-compose.yml` file creates:
 - 3 Spark Worker nodes (each with 2GB memory, 1 core)
 - 1 optional DQ runner service (`dq-runner`) that submits `main.py` from inside Docker
 
+Current Spark container tag: `apache/spark:4.0.1`
+
+If you change the Spark image tag, pull and recreate containers:
+
+```bash
+docker compose pull
+docker compose up -d --force-recreate spark-master spark-worker-1 spark-worker-2 spark-worker-3 dq-runner
+```
+
 ### Scaling Workers
 
 To add more workers, duplicate a worker service in `docker-compose.yml`:
 
 ```yaml
 spark-worker-4:
-  image: apache/spark:3.5.1
+  image: apache/spark:4.0.1
   container_name: spark-worker-4
   command:
     - /opt/spark/bin/spark-class
@@ -145,10 +154,10 @@ spark-worker-4:
     - spark-network
 ```
 
-Then restart:
+Then start the new worker service:
 
 ```bash
-docker compose up -d
+docker compose up -d spark-worker-4
 ```
 
 ## API Reference
