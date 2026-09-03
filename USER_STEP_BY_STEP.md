@@ -2,7 +2,7 @@
 
 ## 1. Infer an initial schema from a representative file
 1. Open `manual_schema_processing.ipynb`.
-2. In Cell 1, set `csv_path` to a representative source file.
+2. In Cell 1, set `input_path` to a representative source file (`.csv` or `.parquet`).
 3. Run Cell 1 to generate `data/schema.json`.
 
 ## 2. Manually adjust schema data types
@@ -31,12 +31,11 @@ docker compose --profile dq run --rm dq-runner
    - total mismatch counts for `df1.exceptAll(df2)` and `df2.exceptAll(df1)`
 
 ## 6. Inspect mismatch output
-1. Open `data/mismatches.csv`.
-2. Validate columns include:
-   - original row data
-   - `pk_identifier`
-   - `mismatched_columns`
-   - `row_source` (`df1` or `df2`)
+1. Open `data/mismatches.json`.
+2. Validate each record includes:
+   - the key column value(s)
+   - a `mismatches` array of `{column_name, df1_value, df2_value}` entries
+   - `__missing_in_df1__`/`__missing_in_df2__` as `column_name` when a key exists on only one side
 
 ## 7. If PK is not found
 1. Revisit `data/schema.json` and convert key/categorical columns to non-numeric types.

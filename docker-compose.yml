@@ -14,7 +14,6 @@ services:
     ports:
       - "7077:7077"
       - "8081:8080"
-      - "4040:4040"
     volumes:
       - spark-master-data:/opt/spark/warehouse
       - ./data:/app/data
@@ -34,9 +33,9 @@ services:
       - /opt/spark/bin/spark-class
       - org.apache.spark.deploy.worker.Worker
       - --cores
-      - "1"
+      - "2"
       - --memory
-      - 2g
+      - 20g
       - spark://spark-master:7077
     depends_on:
       spark-master:
@@ -53,9 +52,9 @@ services:
       - /opt/spark/bin/spark-class
       - org.apache.spark.deploy.worker.Worker
       - --cores
-      - "1"
+      - "2"
       - --memory
-      - 2g
+      - 20g
       - spark://spark-master:7077
     depends_on:
       spark-master:
@@ -72,9 +71,9 @@ services:
       - /opt/spark/bin/spark-class
       - org.apache.spark.deploy.worker.Worker
       - --cores
-      - "1"
+      - "2"
       - --memory
-      - 2g
+      - 20g
       - spark://spark-master:7077
     depends_on:
       spark-master:
@@ -91,6 +90,8 @@ services:
       spark-master:
         condition: service_healthy
     working_dir: /app
+    ports:
+      - "4040:4040"
     volumes:
       - ./:/app
     networks:

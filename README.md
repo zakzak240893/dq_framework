@@ -5,7 +5,7 @@ A PySpark-based local data quality framework for comparing datasets and finding 
 ## Features
 
 - **Schema Comparison**: Compare column names and data types between two datasets
-- **Data Comparison**: Row-by-row comparison with optional column exclusion, showing up to 3 mismatch examples per column
+- **Data Comparison**: Row-by-row comparison via a null-safe full-outer join on key columns, with optional column exclusion, showing up to 3 mismatch examples per column and a nested JSON export of every mismatched row
 - **Primary Key Detection**: Find primary keys using a cardinality-based algorithm on categorical columns
 - **Streaming Logging**: Real-time logging to file
 - **Docker Support**: Scalable Spark cluster with configurable workers
@@ -160,6 +160,21 @@ Then start the new worker service:
 docker compose up -d spark-worker-4
 ```
 
+### Tuning Partition Count
+
+Row-level comparison (`DataQualityFramework.compare_files`) repartitions both loaded DataFrames before primary-key inference and joining. This exists because Spark's file scan splits large Parquet files into partitions based on **compressed bytes on disk**, not row count — since columnar compression density varies across a file (e.g. some column value ranges compress far smaller per row than others), byte-balanced partitions can end up wildly imbalanced in actual row count, causing a few tasks to take 100x longer than the rest ("data skew").
+
+The partition count is derived automatically as:
+
+```
+target_partitions = spark.sparkContext.defaultParallelism * REPARTITION_CORE_MULTIPLIER
+```
+
+`defaultParallelism` reflects the total cores currently registered across all Spark workers, so this scales automatically if you add/remove workers or change `--cores` in `docker-compose.yml`. `REPARTITION_CORE_MULTIPLIER` (default `4`) controls how many partitions each core processes, and can be overridden via `compare.repartition_core_multiplier` in `dq_setup.json` or the `--repartition-core-multiplier` CLI flag:
+
+- Lower it (e.g. `1`) for the fewest possible shuffles/scheduling overhead — appropriate if your data has little skew and every partition costs roughly the same to process.
+- Raise it (e.g. `8`+) for very large datasets or unreliable/slow workers — smaller partitions reduce the wall-clock cost of any single retried/lost task and further average out residual skew.
+
 ## API Reference
 
 ### `DataQualityFramework`
@@ -178,6 +193,7 @@ Main orchestrator class.
   - Compares two local CSV/Parquet files
   - Compares inferred schemas first; optional external schema is only used for row-level comparison
   - Returns up to 3 mismatch examples per column with row identifiers (`row_identifier`) and compared values (`df1_value`, `df2_value`)
+  - Writes every mismatched row to `mismatch_output_path` (default `data/mismatches.json`) as one JSON record per key value: `{<key_columns...>, "mismatches": [{"column_name", "df1_value", "df2_value"}, ...]}`, using `__missing_in_df1__`/`__missing_in_df2__` as the `column_name` when a key exists on only one side
   - Returns: `(bool, dict)` - (success, result)
 
 - `find_primary_keys(file_path, file_type='csv', schema_file_path=None)`

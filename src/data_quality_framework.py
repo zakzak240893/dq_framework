@@ -21,6 +21,10 @@ class DataQualityFramework:
     Follows Dependency Inversion and Interface Segregation principles.
     """
 
+    # Multiplier applied to the cluster's default parallelism to size row-level repartitioning;
+    # see README "Tuning partition count" section before changing this.
+    REPARTITION_CORE_MULTIPLIER = 4
+
     def __init__(
         self,
         log_file: Optional[str] = None,
@@ -53,6 +57,12 @@ class DataQualityFramework:
             elif level == "error":
                 self.logger.log_error(message)
 
+    def _target_partition_count(self, repartition_core_multiplier: Optional[int] = None) -> int:
+        """Derive a repartition target from the cluster's total registered cores."""
+        multiplier = repartition_core_multiplier if repartition_core_multiplier is not None else self.REPARTITION_CORE_MULTIPLIER
+        default_parallelism = self.connector.spark.sparkContext.defaultParallelism
+        return max(default_parallelism * multiplier, 1)
+
     def _load_dataframe(
         self,
         file_path: str,
@@ -80,7 +90,8 @@ class DataQualityFramework:
         exclude_columns: Optional[list] = None,
         schema_file_path: Optional[str] = None,
         key_columns: Optional[list] = None,
-        mismatch_output_path: str = "./data/mismatches.csv",
+        mismatch_output_path: str = "./data/mismatches.json",
+        repartition_core_multiplier: Optional[int] = None,
     ) -> Tuple[bool, Dict]:
         """
         Compare two local files (CSV/Parquet).
@@ -93,7 +104,8 @@ class DataQualityFramework:
             exclude_columns: List of columns to exclude from data comparison.
             schema_file_path: Optional Spark JSON schema file applied only for row-level data comparison.
             key_columns: Optional explicit key columns for row alignment.
-            mismatch_output_path: CSV path for rows missing from either dataset.
+            mismatch_output_path: JSON path for rows missing from or mismatched between the datasets.
+            repartition_core_multiplier: Overrides REPARTITION_CORE_MULTIPLIER for this call (see README "Tuning Partition Count").
 
         Returns:
             Tuple of (is_successful, result_dict) where:
@@ -113,7 +125,7 @@ class DataQualityFramework:
 
             # Compare schemas
             self._log("Comparing inferred schemas...")
-            schemas_match, schema_diff = self.schema_comparator.compare_schemas(df1_inferred, df2_inferred)
+            schemas_match, schema_diff = self.schema_comparator.compare_schemas(df1_inferred, df2_inferred, exclude_columns)
 
             if not schemas_match:
                 self._log("Schema mismatch detected!", "warning")
@@ -139,10 +151,18 @@ class DataQualityFramework:
                 df1_compare = df1_inferred
                 df2_compare = df2_inferred
 
+            # Rebalance by row count (not compressed bytes) to avoid skewed partitions from uneven parquet encoding density.
+            target_partitions = self._target_partition_count(repartition_core_multiplier)
+            self._log(f"Repartitioning row-level DataFrames into {target_partitions} partitions for balanced parallelism...")
+            df1_compare = df1_compare.repartition(target_partitions)
+            df2_compare = df2_compare.repartition(target_partitions)
+
             pk_checked_columns = self.primary_key_finder._get_categorical_columns(df1_compare)
+            datetime_columns = self.primary_key_finder._get_datetime_columns(df1_compare)
             numeric_columns = self.primary_key_finder._get_numeric_columns(df1_compare)
             self._log(f"Metadata | files_compared: file1={file1}, file2={file2}")
             self._log(f"Metadata | pk_columns_checked: {pk_checked_columns}")
+            self._log(f"Metadata | datetime_columns_checked: {datetime_columns}")
             self._log(f"Metadata | numeric_columns: {numeric_columns}")
 
             key_columns_for_compare = None
@@ -163,7 +183,7 @@ class DataQualityFramework:
 
             # If no explicit keys are available, use inferred PK columns.
             if not key_columns_for_compare:
-                is_pk_found_for_compare, compare_pk_columns = self.primary_key_finder.find_primary_keys(df1_compare)
+                is_pk_found_for_compare, compare_pk_columns = self.primary_key_finder.find_primary_keys(df1_compare, exclude_columns)
                 key_columns_for_compare = compare_pk_columns if is_pk_found_for_compare else None
 
             if key_columns_for_compare and not key_columns:

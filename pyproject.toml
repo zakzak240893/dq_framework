@@ -5,6 +5,7 @@ description = "A PySpark-based local data quality framework for comparing datase
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "pandas>=3.0.5",
     "pyarrow>=25.0.0",
     "pyspark>=4.2.0",
 ]

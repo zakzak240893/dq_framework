@@ -2,7 +2,7 @@
 SchemaComparator module for comparing DataFrame schemas.
 """
 
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType, DataType
@@ -15,7 +15,10 @@ class SchemaComparator:
     """
 
     def compare_schemas(
-        self, df1: DataFrame, df2: DataFrame
+        self, 
+        df1: DataFrame, 
+        df2: DataFrame, 
+        exclude_columns: Optional[list[str]] = None
     ) -> Tuple[bool, Dict[str, any]]:
         """
         Compare the schemas of two DataFrames.
@@ -29,12 +32,24 @@ class SchemaComparator:
             - is_match: Boolean indicating if schemas match
             - differences: Dictionary containing details about mismatches
         """
+
+        def exclude_cols( df:DataFrame, exclude_columns:list[str]):
+            for column_to_exclude in exclude_columns:
+                if column_to_exclude in df.columns:
+                    df = df.drop(column_to_exclude)
+            return df
+
+        if exclude_columns:
+            df1 = exclude_cols(df1, exclude_columns)
+            df2 = exclude_cols(df2, exclude_columns)
+        
+
         schema1 = df1.schema
         schema2 = df2.schema
 
         columns1 = set(df1.columns)
         columns2 = set(df2.columns)
-
+        
         differences = {
             "missing_in_df2": list(columns1 - columns2),
             "missing_in_df1": list(columns2 - columns1),

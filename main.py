@@ -173,6 +173,12 @@ def main():
         default=None,
         help="Comma-separated list of key columns used for row alignment"
     )
+    parser.add_argument(
+        "--repartition-core-multiplier",
+        type=int,
+        default=None,
+        help="Multiplier applied to cluster core count when repartitioning row-level DataFrames"
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
@@ -187,7 +193,7 @@ def main():
     remote_mode = args.remote if args.remote is not None else bool(run_cfg.get("remote", False))
     master_url = args.master or run_cfg.get("master", "spark://localhost:7077")
     schema_file = _resolve_path(args.schema_file or run_cfg.get("schema_file"), config_dir)
-    mismatch_output_path = _resolve_path(run_cfg.get("mismatch_output_path", "data/mismatches.csv"), config_dir)
+    mismatch_output_path = _resolve_path(run_cfg.get("mismatch_output_path", "data/mismatches.json"), config_dir)
 
     file1 = _resolve_path(args.file1 or data_cfg.get("file1", "data/sample1.csv"), config_dir)
     file2 = _resolve_path(args.file2 or data_cfg.get("file2", "data/sample2.csv"), config_dir)
@@ -205,6 +211,11 @@ def main():
     )
     key_columns = _parse_key_columns(
         args.key_columns if args.key_columns is not None else compare_cfg.get("key_columns")
+    )
+    repartition_core_multiplier = (
+        args.repartition_core_multiplier
+        if args.repartition_core_multiplier is not None
+        else compare_cfg.get("repartition_core_multiplier")
     )
 
     # Initialize framework with a new log file for each run
@@ -234,6 +245,7 @@ def main():
             schema_file_path=schema_file,
             key_columns=key_columns,
             mismatch_output_path=mismatch_output_path,
+            repartition_core_multiplier=repartition_core_multiplier,
         )
 
         if success:
@@ -259,21 +271,21 @@ def main():
             else:
                 print(f"Comparison failed: {result.get('error', 'Unknown error')}")
 
-        # Example 2: Find primary keys in a dataset
-        print("\n=== Example 2: Find primary keys ===")
-        pk_success, pk_result = framework.find_primary_keys(
-            file_path=pk_file,
-            file_type=pk_file_type,
-            schema_file_path=schema_file,
-        )
+        # # Example 2: Find primary keys in a dataset
+        # print("\n=== Example 2: Find primary keys ===")
+        # pk_success, pk_result = framework.find_primary_keys(
+        #     file_path=pk_file,
+        #     file_type=pk_file_type,
+        #     schema_file_path=schema_file,
+        # )
 
-        if pk_success:
-            if pk_result['pk_found']:
-                print(f"Primary key columns: {pk_result['pk_columns']}")
-            else:
-                print("No valid primary key found.")
-        else:
-            print(f"PK detection failed: {pk_result.get('error', 'Unknown error')}")
+        # if pk_success:
+        #     if pk_result['pk_found']:
+        #         print(f"Primary key columns: {pk_result['pk_columns']}")
+        #     else:
+        #         print("No valid primary key found.")
+        # else:
+        #     print(f"PK detection failed: {pk_result.get('error', 'Unknown error')}")
 
     finally:
         framework.close()

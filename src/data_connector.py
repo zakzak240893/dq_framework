@@ -35,8 +35,12 @@ class DataConnector:
                     .appName("DataQualityFramework")
                     .master(master_url or "spark://localhost:7077")
                     .config("spark.sql.shuffle.partitions", "200")
-                    .config("spark.ui.enabled", "false")
+                    .config("spark.ui.enabled", "true")
+                    .config("spark.ui.port", "4040")
                     .config("spark.sql.adaptive.enabled", "true")
+                    .config("spark.executor.memory", "18g")
+                    .config("spark.executor.memoryOverhead", "1g")
+                    .config("spark.driver.memory", "6g")
                     .config("spark.driver.extraJavaOptions", "-DHADOOP_USER_NAME=root")
                     .config("spark.executor.extraJavaOptions", "-DHADOOP_USER_NAME=root")
                     .getOrCreate()
@@ -45,7 +49,8 @@ class DataConnector:
                 self._spark = (
                     SparkSession.builder.appName("DataQualityFramework")
                     .config("spark.sql.shuffle.partitions", "200")
-                    .config("spark.ui.enabled", "false")
+                    .config("spark.ui.enabled", "true")
+                    .config("spark.ui.port", "4040")
                     .config("spark.driver.bindAddress", "127.0.0.1")
                     .config("spark.sql.warehouse.dir", "tmp/spark-warehouse")
                     .config("spark.driver.extraJavaOptions", 
@@ -62,6 +67,11 @@ class DataConnector:
         else:
             self._spark = spark_session
             self._is_external_session = True
+
+    @property
+    def spark(self) -> SparkSession:
+        """Expose the underlying SparkSession (e.g. to inspect cluster parallelism)."""
+        return self._spark
 
     def _load_struct_schema(self, schema_file_path: str) -> StructType:
         """
