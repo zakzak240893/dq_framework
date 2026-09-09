@@ -167,11 +167,23 @@ class DataConnector:
         if not path.exists():
             raise FileNotFoundError(f"Parquet file not found: {file_path}")
 
-        reader = self._spark.read
-        if schema_file_path:
-            reader = reader.schema(self._load_struct_schema(schema_file_path))
+        df = self._spark.read.parquet(str(path))
 
-        df = reader.parquet(str(path))
+        if schema_file_path:
+            # Cast to the target schema instead of forcing it on the reader: Parquet columns are
+            # already binary-encoded on disk, so reader.schema(...) reinterprets the raw bytes as
+            # the declared type with no conversion. If a file's on-disk decimal precision/scale
+            # differs from the declared schema, that raises PARQUET_COLUMN_DATA_TYPE_MISMATCH.
+            # Reading with the file's own schema first and casting afterward performs a real
+            # value-level conversion, which works regardless of the physical encoding.
+            target_types = {field.name: field.dataType for field in self._load_struct_schema(schema_file_path).fields}
+            df = df.select(
+                *[
+                    col(name).cast(target_types[name]).alias(name) if name in target_types else col(name)
+                    for name in df.columns
+                ]
+            )
+
         return self._normalize_literal_null_strings(df)
 
     def close(self):

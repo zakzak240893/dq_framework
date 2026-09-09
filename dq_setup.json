@@ -5,17 +5,17 @@
     "schema_file": "data/schema.json"
   },
   "data": {
-    "file1": "data/dq/unzipped_and_renamed/f_inventory_coverage_extended.parquet",
-    "file2": "data/dq/unzipped_and_renamed/f_inventory_coverage.parquet",
+    "file1": "data/dt_corrections/R_SNP_SAP_CNT_TER_sf.parquet",
+    "file2": "data/dt_corrections/R_SNP_SAP_CNT_TER.parquet",
     "file1_type": "parquet",
     "file2_type": "parquet"
   },
   "pk": {
-    "file": "data/dq/unzipped_and_renamed/f_inventory_coverage.parquet",
+    "file": "data/dt_corrections/R_SNP_SAP_CNT_TER_sf.parquet",
     "file_type": "parquet"
   },
   "compare": {
-    "exclude_columns": [],
+    "exclude_columns": ["ETL_TST"],
     "key_columns": [],
     "repartition_core_multiplier": 4
   }

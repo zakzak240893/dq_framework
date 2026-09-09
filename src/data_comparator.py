@@ -19,6 +19,7 @@ from pyspark.sql.functions import (
     row_number,
     size,
     struct,
+    sum as spark_sum,
     when,
 )
 
@@ -78,8 +79,10 @@ class DataComparator:
         df2: DataFrame,
         exclude_columns: Optional[List[str]] = None,
         key_columns: Optional[List[str]] = None,
-        mismatch_output_path: str = "./data/mismatches.json",
-    ) -> Tuple[int, Dict[str, List[Dict]]]:
+        missing_in_df1_output_path: str = "./data/mismatches_missing_in_df1.json",
+        missing_in_df2_output_path: str = "./data/mismatches_missing_in_df2.json",
+        data_output_path: str = "./data/mismatches_data.json",
+    ) -> Tuple[int, Dict[str, List[Dict]], Dict[str, int]]:
         """
         Compare data row by row between two DataFrames using a single null-safe full-outer join.
 
@@ -88,29 +91,36 @@ class DataComparator:
             df2: Second DataFrame.
             exclude_columns: List of columns to exclude from comparison.
             key_columns: Required key columns used to align rows across DataFrames.
-            mismatch_output_path: Path to write the nested mismatches JSON file.
+            missing_in_df1_output_path: Path to write rows whose key exists only in df2 (missing from df1).
+            missing_in_df2_output_path: Path to write rows whose key exists only in df1 (missing from df2).
+            data_output_path: Path to write rows present on both sides with column-level discrepancies.
 
         Returns:
-            Tuple of (total_mismatches, mismatch_samples) where:
-            - total_mismatches: Total number of rows with at least one mismatch
+            Tuple of (total_mismatches, mismatch_samples, row_counts) where:
+            - total_mismatches: Total number of rows with at least one mismatch, based on the
+              keyed full-outer comparison (same count as missing_in_df1 + missing_in_df2 +
+              data_discrepancies, and consistent with the rows written to the output files).
             - mismatch_samples: Dictionary mapping column names to up to 3 example mismatches
               including row identifiers and mismatched values.
+            - row_counts: Dictionary with "missing_in_df1", "missing_in_df2", and "data_discrepancies" counts.
         """
         if exclude_columns is None:
             exclude_columns = []
 
         key_columns = key_columns or []
 
-        # Required pre-check: directional row delta from df1 to df2.
-        total_mismatches = df1.exceptAll(df2).count()
-        self._log(f"Total mismatches from df1.exceptAll(df2): {total_mismatches}")
-        reverse_total_mismatches = df2.exceptAll(df1).count()
-        self._log(f"Total mismatches from df2.exceptAll(df1): {reverse_total_mismatches}")
+        # Diagnostic-only pre-check: exact full-row (all-columns) set difference, not the keyed
+        # comparison used for reporting. Can be near-total even when keyed mismatches are few, e.g.
+        # when a non-key column (like a timestamp) differs on nearly every row.
+        exceptall_df1_to_df2 = df1.drop(*exclude_columns).exceptAll(df2.drop(*exclude_columns)).count()
+        self._log(f"Diagnostic full-row mismatches from df1.exceptAll(df2): {exceptall_df1_to_df2}")
+        exceptall_df2_to_df1 = df2.drop(*exclude_columns).exceptAll(df1.drop(*exclude_columns)).count()
+        self._log(f"Diagnostic full-row mismatches from df2.exceptAll(df1): {exceptall_df2_to_df1}")
 
         common_columns = [c for c in df1.columns if c in df2.columns]
         if not common_columns:
             self._log("No common columns found. Skipped missing-row export.", "warning")
-            return total_mismatches, {}
+            return 0, {}, {}
 
         missing_keys = [k for k in key_columns if k not in df1.columns or k not in df2.columns]
         if not key_columns or missing_keys:
@@ -119,7 +129,7 @@ class DataComparator:
         non_key_cols = sorted(c for c in common_columns if c not in exclude_columns and c not in key_columns)
         if not non_key_cols:
             self._log("No comparable non-key columns found. Skipped missing-row export.", "warning")
-            return total_mismatches, {}
+            return 0, {}, {}
 
         df1_marked = df1.withColumn("_dq_in_df1", lit(True))
         df2_marked = df2.withColumn("_dq_in_df2", lit(True))
@@ -169,33 +179,56 @@ class DataComparator:
             .otherwise(both_sides_mismatches)
         )
 
-        # Cache: the joined mismatches are reused across the count, JSON write, and sample query below.
+        # Cache: the joined mismatches are reused across the count, JSON writes, and sample query below.
         result = (
             joined.withColumn("mismatches", mismatches_col)
-            .select(*key_columns, "mismatches")
+            .select(*key_columns, "mismatches", "_dq_in_df1", "_dq_in_df2")
             .filter(size("mismatches") > 0)
             .cache()
         )
 
         try:
-            detailed_mismatch_count = result.count()
+            row_counts_row = result.select(
+                spark_sum(when(col("_dq_in_df1").isNull(), 1).otherwise(0)).alias("missing_in_df1"),
+                spark_sum(when(col("_dq_in_df2").isNull(), 1).otherwise(0)).alias("missing_in_df2"),
+                spark_sum(
+                    when(col("_dq_in_df1").isNotNull() & col("_dq_in_df2").isNotNull(), 1).otherwise(0)
+                ).alias("data_discrepancies"),
+            ).first()
+            row_counts = {
+                "missing_in_df1": row_counts_row["missing_in_df1"] or 0,
+                "missing_in_df2": row_counts_row["missing_in_df2"] or 0,
+                "data_discrepancies": row_counts_row["data_discrepancies"] or 0,
+            }
+            detailed_mismatch_count = (
+                row_counts["missing_in_df1"] + row_counts["missing_in_df2"] + row_counts["data_discrepancies"]
+            )
             self._log(f"Detailed mismatch rows (keyed full-outer comparison): {detailed_mismatch_count}")
 
-            self._write_single_json(result, mismatch_output_path)
-            self._log(f"Saved detailed mismatches to {mismatch_output_path}")
+            missing_in_df1_result = result.filter(col("_dq_in_df1").isNull()).select(*key_columns, "mismatches").dropDuplicates()
+            missing_in_df2_result = result.filter(col("_dq_in_df2").isNull()).select(*key_columns, "mismatches").dropDuplicates()
+            data_result = result.filter(
+                col("_dq_in_df1").isNotNull() & col("_dq_in_df2").isNotNull()
+            ).select(*key_columns, "mismatches").dropDuplicates()
+
+            self._write_single_json(missing_in_df1_result, missing_in_df1_output_path)
+            self._log(f"Saved rows missing from df1 to {missing_in_df1_output_path}")
+            self._write_single_json(missing_in_df2_result, missing_in_df2_output_path)
+            self._log(f"Saved rows missing from df2 to {missing_in_df2_output_path}")
+            self._write_single_json(data_result, data_output_path)
+            self._log(f"Saved data-discrepancy mismatches to {data_output_path}")
 
             if detailed_mismatch_count == 0:
-                return total_mismatches, {}
+                return detailed_mismatch_count, {}, row_counts
 
             exploded = (
-                result.select(*key_columns, explode(col("mismatches")).alias("mismatch"))
+                data_result.select(*key_columns, explode(col("mismatches")).alias("mismatch"))
                 .select(
                     *key_columns,
                     col("mismatch.column_name").alias("column_name"),
                     col("mismatch.df1_value").alias("df1_value"),
                     col("mismatch.df2_value").alias("df2_value"),
                 )
-                .filter(~col("column_name").isin(MISSING_IN_DF1_MARKER, MISSING_IN_DF2_MARKER))
             )
 
             sample_window = Window.partitionBy("column_name").orderBy(monotonically_increasing_id())
@@ -219,4 +252,4 @@ class DataComparator:
                 }
             )
 
-        return total_mismatches, mismatch_samples
+        return detailed_mismatch_count, mismatch_samples, row_counts

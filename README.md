@@ -77,7 +77,7 @@ docker compose up -d spark-master spark-worker-1 spark-worker-2 spark-worker-3
 Default config file:
 
 ```bash
-docker compose --profile dq run --rm dq-runner
+docker compose --profile dq run --service-ports --rm dq-runner
 ```
 
 Custom config file:
@@ -175,6 +175,23 @@ target_partitions = spark.sparkContext.defaultParallelism * REPARTITION_CORE_MUL
 - Lower it (e.g. `1`) for the fewest possible shuffles/scheduling overhead — appropriate if your data has little skew and every partition costs roughly the same to process.
 - Raise it (e.g. `8`+) for very large datasets or unreliable/slow workers — smaller partitions reduce the wall-clock cost of any single retried/lost task and further average out residual skew.
 
+#### Choosing a value for your machine
+
+Important: this multiplier only controls how the *existing* total work is sliced up — it does not reduce the total CPU-seconds of work, which is bounded by your cluster's total cores (`defaultParallelism`). With `N` partitions and `C` total cores, tasks run in `ceil(N / C)` sequential waves, so total wall time for the repartitioned stage is roughly `waves * time_per_partition`. Going from `N = C` (1 wave) to `N = 4*C` (4 waves) does **not** make the stage faster — it only shrinks each individual partition (which helps if a task gets retried/lost, and further evens out any residual skew).
+
+Pick a value based on how many cores you've actually configured across `docker-compose.yml` workers (`--cores` per worker × number of workers):
+
+- **Few cores (2-6 total, e.g. the default 3-worker/2-core-each setup)**: use `2-4`. Keeping partitions reasonably large avoids excessive scheduling overhead when there aren't many cores to spread work across anyway.
+- **Moderate core count (8-32 total)**: `4` (the default) is a good starting point — enough granularity for retry resilience without too many tiny tasks.
+- **Many cores (32+ total, e.g. several beefy workers)**: raise to `6-8` so there are enough partitions to keep all cores busy simultaneously and avoid a few large partitions straggling behind while other cores sit idle.
+- If wall-clock time for the repartitioned stages is too slow regardless of this setting, the fix is to add more Spark worker cores (more workers, or a higher `--cores` value per worker in `docker-compose.yml`), not to keep raising the multiplier.
+
+#### Lower-RAM machines
+
+If your machine has less RAM than the workers/executors are configured for in `docker-compose.yml` and `src/data_connector.py`, **raise** `repartition_core_multiplier` (e.g. `6-8+`) rather than lower it. More, smaller partitions mean each task holds less data in memory at once, reducing per-task/executor memory pressure — at the cost of more (but individually cheaper) shuffle tasks, which is a reasonable trade-off when memory, not CPU, is the constraint.
+
+Also lower `spark.executor.memory` / `spark.executor.memoryOverhead` / `spark.driver.memory` in `src/data_connector.py` and the `--memory` value per worker in `docker-compose.yml` to fit your available RAM — check total memory available to Docker with `docker info --format '{{.MemTotal}}'` first, and keep total demand (all executors + driver + a few GB overhead for the master/worker daemons and OS) comfortably under that value to avoid the engine's OOM killer terminating an executor (visible in logs as `Command exited with code 137` / `Lost executor N`).
+
 ## API Reference
 
 ### `DataQualityFramework`
@@ -193,7 +210,10 @@ Main orchestrator class.
   - Compares two local CSV/Parquet files
   - Compares inferred schemas first; optional external schema is only used for row-level comparison
   - Returns up to 3 mismatch examples per column with row identifiers (`row_identifier`) and compared values (`df1_value`, `df2_value`)
-  - Writes every mismatched row to `mismatch_output_path` (default `data/mismatches.json`) as one JSON record per key value: `{<key_columns...>, "mismatches": [{"column_name", "df1_value", "df2_value"}, ...]}`, using `__missing_in_df1__`/`__missing_in_df2__` as the `column_name` when a key exists on only one side
+  - Writes mismatched rows under `mismatch_output_dir/<file1 stem>/` (default base dir `data/mismatches`), split into three JSON files, one record per key value: `{<key_columns...>, "mismatches": [{"column_name", "df1_value", "df2_value"}, ...]}`
+    - `mismatches_missing_in_df1.json`: rows whose key exists only in df2 (`column_name` is `__missing_in_df1__`)
+    - `mismatches_missing_in_df2.json`: rows whose key exists only in df1 (`column_name` is `__missing_in_df2__`)
+    - `mismatches_data.json`: rows present on both sides with column-level value discrepancies
   - Returns: `(bool, dict)` - (success, result)
 
 - `find_primary_keys(file_path, file_type='csv', schema_file_path=None)`

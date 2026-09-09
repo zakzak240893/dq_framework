@@ -193,7 +193,7 @@ def main():
     remote_mode = args.remote if args.remote is not None else bool(run_cfg.get("remote", False))
     master_url = args.master or run_cfg.get("master", "spark://localhost:7077")
     schema_file = _resolve_path(args.schema_file or run_cfg.get("schema_file"), config_dir)
-    mismatch_output_path = _resolve_path(run_cfg.get("mismatch_output_path", "data/mismatches.json"), config_dir)
+    mismatch_output_dir = _resolve_path(run_cfg.get("mismatch_output_dir", "data/mismatches"), config_dir)
 
     file1 = _resolve_path(args.file1 or data_cfg.get("file1", "data/sample1.csv"), config_dir)
     file2 = _resolve_path(args.file2 or data_cfg.get("file2", "data/sample2.csv"), config_dir)
@@ -244,7 +244,7 @@ def main():
             exclude_columns=exclude_columns,
             schema_file_path=schema_file,
             key_columns=key_columns,
-            mismatch_output_path=mismatch_output_path,
+            mismatch_output_dir=mismatch_output_dir,
             repartition_core_multiplier=repartition_core_multiplier,
         )
 
@@ -253,8 +253,12 @@ def main():
             print(f"Total mismatches: {result['total_mismatches']}")
             if result.get("row_identifier_columns"):
                 print(f"Row identifier columns: {result['row_identifier_columns']}")
-            if result.get("missing_rows_file"):
-                print(f"Missing rows file: {result['missing_rows_file']}")
+            if result.get("missing_in_df1_file"):
+                print(f"Missing in df1 file: {result['missing_in_df1_file']}")
+            if result.get("missing_in_df2_file"):
+                print(f"Missing in df2 file: {result['missing_in_df2_file']}")
+            if result.get("data_mismatches_file"):
+                print(f"Data mismatches file: {result['data_mismatches_file']}")
             if result['mismatch_samples']:
                 print("\nMismatch samples (up to 3 per column):")
                 for col_name, samples in result['mismatch_samples'].items():

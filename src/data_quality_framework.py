@@ -90,7 +90,7 @@ class DataQualityFramework:
         exclude_columns: Optional[list] = None,
         schema_file_path: Optional[str] = None,
         key_columns: Optional[list] = None,
-        mismatch_output_path: str = "./data/mismatches.json",
+        mismatch_output_dir: str = "./data/mismatches",
         repartition_core_multiplier: Optional[int] = None,
     ) -> Tuple[bool, Dict]:
         """
@@ -104,7 +104,10 @@ class DataQualityFramework:
             exclude_columns: List of columns to exclude from data comparison.
             schema_file_path: Optional Spark JSON schema file applied only for row-level data comparison.
             key_columns: Optional explicit key columns for row alignment.
-            mismatch_output_path: JSON path for rows missing from or mismatched between the datasets.
+            mismatch_output_dir: Base directory under which a `<file1 stem>/` subfolder is created,
+                containing `mismatches_missing_in_df1.json` (rows whose key exists only in df2),
+                `mismatches_missing_in_df2.json` (rows whose key exists only in df1), and
+                `mismatches_data.json` (rows present on both sides with column-level discrepancies).
             repartition_core_multiplier: Overrides REPARTITION_CORE_MULTIPLIER for this call (see README "Tuning Partition Count").
 
         Returns:
@@ -152,76 +155,105 @@ class DataQualityFramework:
                 df2_compare = df2_inferred
 
             # Rebalance by row count (not compressed bytes) to avoid skewed partitions from uneven parquet encoding density.
+            # Cached so later actions (exceptAll counts, PK inference, join) reuse the balanced partitions instead of
+            # re-scanning the source files, which would reintroduce compression-density skew from a fresh byte-based scan.
             target_partitions = self._target_partition_count(repartition_core_multiplier)
             self._log(f"Repartitioning row-level DataFrames into {target_partitions} partitions for balanced parallelism...")
-            df1_compare = df1_compare.repartition(target_partitions)
-            df2_compare = df2_compare.repartition(target_partitions)
+            df1_compare = df1_compare.repartition(target_partitions).cache()
+            df2_compare = df2_compare.repartition(target_partitions).cache()
 
-            pk_checked_columns = self.primary_key_finder._get_categorical_columns(df1_compare)
-            datetime_columns = self.primary_key_finder._get_datetime_columns(df1_compare)
-            numeric_columns = self.primary_key_finder._get_numeric_columns(df1_compare)
-            self._log(f"Metadata | files_compared: file1={file1}, file2={file2}")
-            self._log(f"Metadata | pk_columns_checked: {pk_checked_columns}")
-            self._log(f"Metadata | datetime_columns_checked: {datetime_columns}")
-            self._log(f"Metadata | numeric_columns: {numeric_columns}")
+            try:
+                pk_checked_columns = self.primary_key_finder._get_categorical_columns(df1_compare)
+                datetime_columns = self.primary_key_finder._get_datetime_columns(df1_compare)
+                numeric_columns = self.primary_key_finder._get_numeric_columns(df1_compare)
+                self._log(f"Metadata | files_compared: file1={file1}, file2={file2}")
+                self._log(f"Metadata | pk_columns_checked: {pk_checked_columns}")
+                self._log(f"Metadata | datetime_columns_checked: {datetime_columns}")
+                self._log(f"Metadata | numeric_columns: {numeric_columns}")
 
-            key_columns_for_compare = None
-            if key_columns:
-                missing_columns = [
-                    c for c in key_columns if c not in df1_compare.columns or c not in df2_compare.columns
-                ]
-                if missing_columns:
-                    self._log(
-                        f"Provided key columns not found in both datasets: {missing_columns}. Falling back to PK inference.",
-                        "warning",
-                    )
-                else:
-                    key_columns_for_compare = key_columns
-                    self._log(
-                        f"Using user-provided key columns for mismatch row identification: {key_columns_for_compare}"
-                    )
-
-            # If no explicit keys are available, use inferred PK columns.
-            if not key_columns_for_compare:
-                is_pk_found_for_compare, compare_pk_columns = self.primary_key_finder.find_primary_keys(df1_compare, exclude_columns)
-                key_columns_for_compare = compare_pk_columns if is_pk_found_for_compare else None
-
-            if key_columns_for_compare and not key_columns:
-                self._log(f"Using inferred PK columns for mismatch row identification: {key_columns_for_compare}")
-            else:
-                if not key_columns_for_compare:
-                    error_message = "No PK found for mismatch row identification. Row-number fallback is disabled."
-                    self._log(error_message, "error")
-                    return False, {"error": error_message}
-
-            # Compare data
-            total_mismatches, mismatch_samples = self.data_comparator.compare_data(
-                df1_compare,
-                df2_compare,
-                exclude_columns,
-                key_columns=key_columns_for_compare,
-                mismatch_output_path=mismatch_output_path,
-            )
-
-            self._log(f"Data comparison completed. Total mismatches: {total_mismatches}")
-
-            if total_mismatches > 0 and mismatch_samples:
-                self._log(f"Mismatch row identifier columns: {key_columns_for_compare or ['row_num']}")
-                for col_name, samples in mismatch_samples.items():
-                    self._log(f"Column '{col_name}' mismatch examples (up to 3):")
-                    for idx, sample in enumerate(samples, 1):
+                key_columns_for_compare = None
+                if key_columns:
+                    missing_columns = [
+                        c for c in key_columns if c not in df1_compare.columns or c not in df2_compare.columns
+                    ]
+                    if missing_columns:
                         self._log(
-                            f"  Example {idx}: row={sample.get('row_identifier')}, "
-                            f"df1={sample.get('df1_value')}, df2={sample.get('df2_value')}"
+                            f"Provided key columns not found in both datasets: {missing_columns}. Falling back to PK inference.",
+                            "warning",
+                        )
+                    else:
+                        key_columns_for_compare = key_columns
+                        self._log(
+                            f"Using user-provided key columns for mismatch row identification: {key_columns_for_compare}"
                         )
 
-            return True, {
-                "schemas_match": True,
-                "total_mismatches": total_mismatches,
-                "mismatch_samples": mismatch_samples,
-                "row_identifier_columns": key_columns_for_compare,
-                "missing_rows_file": mismatch_output_path,
-            }
+                # If no explicit keys are available, use inferred PK columns.
+                if not key_columns_for_compare:
+                    is_pk_found_for_compare, compare_pk_columns = self.primary_key_finder.find_primary_keys(df1_compare, exclude_columns)
+                    key_columns_for_compare = compare_pk_columns if is_pk_found_for_compare else None
+
+                if key_columns_for_compare and not key_columns:
+                    self._log(f"Using inferred PK columns for mismatch row identification: {key_columns_for_compare}")
+                else:
+                    if not key_columns_for_compare:
+                        error_message = "No PK found for mismatch row identification. Row-number fallback is disabled."
+                        self._log(error_message, "error")
+                        return False, {"error": error_message}
+
+                # Compare data
+                object_name = Path(file1).stem
+                object_mismatch_dir = Path(mismatch_output_dir) / object_name
+                missing_in_df1_output_path = str(object_mismatch_dir / "mismatches_missing_in_df1.json")
+                missing_in_df2_output_path = str(object_mismatch_dir / "mismatches_missing_in_df2.json")
+                data_output_path = str(object_mismatch_dir / "mismatches_data.json")
+
+                total_mismatches, mismatch_samples, row_counts = self.data_comparator.compare_data(
+                    df1_compare,
+                    df2_compare,
+                    exclude_columns,
+                    key_columns=key_columns_for_compare,
+                    missing_in_df1_output_path=missing_in_df1_output_path,
+                    missing_in_df2_output_path=missing_in_df2_output_path,
+                    data_output_path=data_output_path,
+                )
+
+                self._log(f"Data comparison completed. Total mismatches: {total_mismatches}")
+
+                discrepancy_columns = list(mismatch_samples.keys())
+                columns_with_issues = discrepancy_columns + [
+                    label
+                    for label, count in (
+                        ("missing_in_df1", row_counts["missing_in_df1"]),
+                        ("missing_in_df2", row_counts["missing_in_df2"]),
+                    )
+                    if count > 0
+                ]
+                self._log(f"Columns/rows with discrepancies: {columns_with_issues}")
+
+                if total_mismatches > 0 and mismatch_samples:
+                    self._log(f"Mismatch row identifier columns: {key_columns_for_compare or ['row_num']}")
+                    for col_name, samples in mismatch_samples.items():
+                        self._log(f"Column '{col_name}' mismatch examples (up to 3):")
+                        for idx, sample in enumerate(samples, 1):
+                            self._log(
+                                f"  Example {idx}: row={sample.get('row_identifier')}, "
+                                f"df1={sample.get('df1_value')}, df2={sample.get('df2_value')}"
+                            )
+
+                return True, {
+                    "schemas_match": True,
+                    "total_mismatches": total_mismatches,
+                    "mismatch_samples": mismatch_samples,
+                    "columns_with_discrepancies": columns_with_issues,
+                    "row_counts": row_counts,
+                    "row_identifier_columns": key_columns_for_compare,
+                    "missing_in_df1_file": missing_in_df1_output_path,
+                    "missing_in_df2_file": missing_in_df2_output_path,
+                    "data_mismatches_file": data_output_path,
+                }
+            finally:
+                df1_compare.unpersist()
+                df2_compare.unpersist()
 
         except Exception as e:
             self._log(f"Error during comparison: {str(e)}", "error")
