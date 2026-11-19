@@ -7,12 +7,7 @@ ENV SPARK_HOME=/opt/spark
 ENV PATH=$PATH:/opt/spark/bin
 ENV HADOOP_USER_NAME=root
 
-# Install OpenJDK 11 and dependencies
-RUN apt-get update && apt-get install -y \
-    openjdk-11-jdk-headless \
-    curl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+
 
 # Download and install Spark 4.0.1
 RUN curl -s https://archive.apache.org/dist/spark/spark-4.0.1/spark-4.0.1-bin-hadoop3.tgz | tar xz -C /opt \
